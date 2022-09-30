@@ -1,0 +1,174 @@
+---
+title:  "Counting integer points in a convex rational polytope"
+categories: math algorithm
+excerpt: "...a rather informal presentation of the algorithm skimming over many proofs, focusing instead on the intuition."
+date: 2017-09-11
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta http-equiv="Content-Style-Type" content="text/css" />
+  <meta name="generator" content="pandoc" />
+  <title>Counting integer points in a convex rational polytope</title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML" type="text/javascript"></script>
+</head>
+<body>
+<div id="header">
+<h1 class="title">Counting integer points in a convex rational polytope</h1>
+</div>The latex version can be found <a href='/assets/files/barvinok-1.pdf'>here</a> (though Pandoc seems to have done its job rather well)
+<h1 id="problem" class="unnumbered">Problem</h1>
+<p>We have a convex rational polytope and want to count the integer points inside it, that is given <span class="math inline">\(P = \{x \in {\mathbb{Z}}^n, Ax \le B\}\)</span>, we want <span class="math inline">\(\#P\)</span>. The algorithm described is polynomial in the number of inequalities <em>with the dimension <span class="math inline">\(n\)</span> fixed</em>.</p>
+<h1 id="preface" class="unnumbered">Preface</h1>
+<p>In a period of downtime, I got interested in algebraic number theory and ended up having to count vectors with coefficients limited in size in the kernel of a matrix. Thus I discovered Barvinok’s algorithm. At least two solvers already exist but reinventing the wheel is so fun.</p>
+<p>This algorithm can be implemented from scratch (I only ended up using fplll library, did not try to plug my pseudo-working LLL implementation) while using some beautiful ideas and neat tricks. The presented version is primal half-open variant only, which to me was more easily understandable as it does without the whole notion of polarity.</p>
+<p>The purpose of this document is to give a rather informal presentation of the algorithm skimming over many proofs, focusing instead on the intuition. Several implementation details that are either completely unmentioned or glossed over in the litterature are also presented. It should be fairly comprehensive so as to allow the reader to implement the full algorithm. That’s because I’m redacting this partly for documentation purposes, not too long after finishing the implementation.</p>
+<p>Basic algebra and convex optimization notions are not explained. The reader unfamiliar with such notions should refer to documents such as <span class="citation">(Loera, Hemmecke, and Köppe 2012)</span>.</p>
+<h1 id="overview" class="unnumbered">Overview</h1>
+<p>Given a convex rational polytope <span class="math inline">\(P = \{x \in {\mathbb{Z}}^n, Ax \le B\}\)</span>, find <span class="math inline">\(\#P\)</span>. The algorithm steps are:</p>
+<ul>
+<li><p>view the polytope as a signed sum of (pointed) tangent cones about a vertex and of tangent cones of faces.</p></li>
+<li><p>The generating function view allows us to consider only the tangent cones about a vertex as the others are non-pointed.</p></li>
+<li><p>Decompose each cone as a bunch of simplicial cones. The inclusion or exclusion of each face matters so as not to count points multiple times.</p></li>
+<li><p>Compute the generating function of a simplicial cone.</p>
+<ol>
+<li><p>Recursively express a simplicial cone as a signed sum of simplicial cones so that fundamental parallelepiped of the cone can be enumerated.</p></li>
+<li><p>List the points in the fundamental parallelepiped</p></li>
+</ol></li>
+<li><p>Evaluate the generating function at <span class="math inline">\(z=1^n\)</span></p></li>
+</ul>
+<p>The generating function in practice is not explicitely computed. The evaluation is directly updated as soon as more terms of the generating function are obtained. This however transforms the algorithm to a randomized one but as we will see, failures do not matter as they happen on a measure zero set.</p>
+<p>The main algorithm is first described for the simplest configuration: a non degenerate polytope with integer vertices. In the last section, we address how these generalizations are handled.</p>
+<h1 id="toward-a-representation-of-the-polytope-as-a-signed-sum-of-pointed-cones" class="unnumbered">Toward a representation of the polytope as a signed sum of pointed cones</h1>
+<p>We use the usual indicator function of a convex set C, defined as: <span class="math display">\[\begin{aligned}
+[C]: {\mathbb{R}}^n  \mapsto {\mathbb{R}}, [C](x) = \begin{cases}1&amp; \text{if }x \in C\\  0 &amp; \text{otherwise} \end{cases}\end{aligned}\]</span> Brion’s theorem states that: <span class="math display">\[\begin{aligned}
+  [P] = \sum_{\emptyset \neq F\text{ faces of }P\text{ (including P itself)}} (-1)^{\dim F} \left[tcone(P,F)\right]\end{aligned}\]</span>, where <span class="math inline">\(tcone(P,F)\)</span> is the tangent cone at any point <span class="math inline">\(x_F \in F\)</span>, <span><em>in the interior of <span class="math inline">\(F\)</span></em></span> (e.g. the tangent cone of an edge of a convex 2D polygon is the half-plane containing P, supported by the edge)</p>
+<p>The generating function of a polytope P is: <span class="math display">\[\begin{aligned}
+f(x,P) = \sum_{z \in {\mathbb{Z}}^n} [P](z) \times z = \sum_{z \in P \cap {\mathbb{Z}}^n} z\end{aligned}\]</span> For a simplicial pointed cone at vertex v with rays <span class="math inline">\(\bigcup_i{r_i}\)</span>, the generating function is <span class="math display">\[\begin{aligned}
+f(x,Cv) = z^v \frac{\sum_{u \in (\Pi \cap {\mathbb{Z}}^n)} z^u}{\prod_i (1 - z^{r_i})}\end{aligned}\]</span> This formula is very important and we’ll make use of it later. Nice explanatory pictures are found in <span class="citation">(Yoshida, n.d.)</span>. The nice thing with this representation is that the generating function of non-pointed cones is 0. An easy example showing this is the generating function for the x-axis line: <span class="math display">\[\begin{aligned}
+\sum_{i=-\infty}^{\infty} x^i = \left(\sum_{i=0}^{\infty} x^i + x^{-i}\right) - x^0 = \frac{1}{1-x} + \frac{1}{1-x^{-1}} - 1 = \frac{(1-x^{-1}) + (1-x) - (2-x-x^{-1})}{2-x-x^{-1}} = 0\end{aligned}\]</span></p>
+<p>Thus we can discard terms in the Brion formula where <span class="math inline">\(\dim F \neq 0\)</span> (because all these terms are non pointed cone). We are left with <span class="math inline">\(f(x,P) = \sum_{v \in vertex(P)} f(x, cone(P,v))\)</span></p>
+<p>Suppose we have found the generating function <span class="math inline">\(f(x,P)\)</span>. Evaluating this function at <span class="math inline">\(1^n\)</span> gives us the number of integer points in P, what we are looking for.</p>
+<h1 id="going-from-cones-to-simplicial-cones" class="unnumbered">Going from cones to simplicial cones</h1>
+<p>We must go in 3D to find a non-simplicial cones we can have to handle coming from a polytope. A pyramid has one non simplicial cone. A simplicial cone in <span class="math inline">\(n-\)</span>dimensions has n rays that span the whole space. Finding a decomposition of a cone into simplicial ones is easy.</p>
+<h3 id="splitting-the-cone-with-a-hyperplane" class="unnumbered">Splitting the cone with a hyperplane</h3>
+<p>A non-simplicial cone has at least <span class="math inline">\(n+1\)</span> rays. There exists a linear hyperplane formed by <span class="math inline">\(n-1\)</span> rays such that rays lie on both side of the hyperplane. Starting with k rays, we end up with a left and a right set each at most k-1 rays. Moreover, the left and right cones only intersect on the splitting hyperplane. Repeating this procedure, we eventually end up with a simplicial decomposition.</p>
+<p>A sketch of a proof of why such a splitting linear hyperplane exists: Select n rays <span class="math inline">\(r_i\)</span> spanning the whole space. Choose any remaining ray <span class="math inline">\(u\)</span>. if <span class="math inline">\(u \not \in cone(r_i)\)</span>, then obviously a face of <span class="math inline">\(cone(r_i)\)</span> will fit as the splitting hyperplane. It remains the case for <span class="math inline">\(u \in cone(r_i)\)</span>. We have <span class="math inline">\(u = \sum \lambda_i r_i\)</span>, with <span class="math inline">\(\lambda_i \ge 0\)</span>. Moreover, say <span class="math inline">\(\lambda_1, \lambda_2 &gt; 0\)</span> (at least two are nonzero as it does not make sense to consider a cone with two collinear rays). Thus <span class="math display">\[\begin{aligned}
+  \lambda_1 r_1 &amp;= u - \lambda_2 r_2  - \sum_{i&gt;2} \lambda_i r_i  \\
+  r_1 &amp;= \mu_u u + \mu_2 r_2  + \sum_{i&gt;2} \mu_i r_i\end{aligned}\]</span> , with <span class="math inline">\(\mu_2 &lt; 0\)</span>. Thus <span class="math inline">\(r_1 \not \in cone(u, r_2, ..., r_n)\)</span>. We are back in the previous case, where a face of this new cone can be chosen as the splitting hyperplane. <span class="math inline">\(\square\)</span></p>
+<h2 id="the-simplicial-cones-are-not-disjoint" class="unnumbered">The simplicial cones are not disjoint</h2>
+<p>The only problem with this splitting is that the cones are sharing faces. It means that we might double count integer points. The solution for this is to be able to compute the generating function of a cone where we additionally decide to either include or exclude faces. It requires two things.</p>
+<ul>
+<li><p>decide how the including-excluding for the faces is done.</p></li>
+<li><p>how the generating function is computed with this additional constraint taken into account.</p></li>
+</ul>
+<p>We’ll discuss the first problem here while we defer the second problem to the next section.</p>
+<h3 id="attributing-the-include-exclude-property-to-each-face" class="unnumbered">Attributing the include-exclude property to each face</h3>
+<p>To sum up the situation, a cone is split into multiple simplicial cones. The union is the original cone but it is not disjoint. To make it disjoint, we need to play with the inclusion-exclusion of faces. More formally:</p>
+<ul>
+<li><p>an extended simplicial cone is defined as <span class="math inline">\(C_k = C_{raw,k} \cup \bar F_k\)</span>, where <span class="math inline">\(C_{raw,k} = cone\left(\bigcup_{i \in I_k}{r_i}\right)\)</span> and <span class="math inline">\(F_k\)</span> is the set of faces that should be included (<span class="math inline">\(\bar F_k\)</span> excluded) for the cone <span class="math inline">\(C_k\)</span>. A face has a one-to-one mapping to a ray: we associate to <span class="math inline">\(r_a\)</span> the face <span class="math inline">\(cone(\bigcup_{i\neq a} r_i)\)</span>.</p></li>
+<li><p>Denote by <span class="math inline">\(F_0\)</span> the set of faces in the original cone and by <span class="math inline">\(F_1\)</span> the set of inner faces, created by the split (i.e. the set of faces of the simplicial cones minus <span class="math inline">\(F_0\)</span>).</p></li>
+<li><p>We must have <span class="math inline">\(\bigcup_{k} F_k = F_0 \cup F_1\)</span>, as well as the condition that <span class="math inline">\(\forall (f_a, f_b) \in (F_0 \cup F_1)^2, f_a \cap f_b = \dot\bigcup_k \left(F_k  \cap (f_a \cap f_b)\right)\)</span>, with the emphasis on the disjoin union.</p></li>
+</ul>
+<p>That will prevent the double counting. To find an assignement in a simple manner, one needs to notice that <span class="math inline">\(F_0\)</span> contributions comes from the faces of one simplicial cones and faces <span class="math inline">\(F_1\)</span> comes from exactly two simplicial cones. Thus each condition rests on at most two variables, the inclusion-exclusion of a face for at most two simplicial cones. Hello 2-SAT. I don’t have a non-tedious way to present the 2-SAT conditions so I’ll leave it as an exercise. As for the existence of a solution, there is one (in the literrature it’s not achieved with 2-SAT but with a constructive algorithm). As a side note, the existence relies on the all-inclusivity of the faces of the original cone, as some pattern exists where no solution can be found (eg 1-0-1-0 for the pyramid).</p>
+<p>This 2-SAT representation will also be used in the next section for face control when splitting simplicial cones in search for cones with lower index.</p>
+<h1 id="computing-the-generating-function-of-a-simplicial-cone" class="unnumbered">Computing the generating function of a simplicial cone</h1>
+<p>Here we are given a simplicial cone about a vertex and a boolean list representing whether to include or exclude each face. The generating function for a cone about a vertex v, with all faces included, is: <span class="math inline">\(f(x,Cv) = z^v \frac {\sum_{u \in \Pi} z^u}{\prod_i (1 - z^{r_i})}\)</span>. Pictures in <span class="citation">(Yoshida, n.d.)</span> help undertanding the formula.</p>
+<h2 id="enumerating-integer-points-in-the-fundamental-parallelepiped" class="unnumbered">Enumerating integer points in the fundamental parallelepiped</h2>
+<p>The fundamental parallelepiped is <span class="math inline">\(\Pi = \{\sum \lambda_i r_i, 0 \le \lambda_i &lt; 1\}\)</span> .The solution to account for the inclusion-exclusion of faces is obvious here. We just have to play on the strict-or-not inequalities. So for example, if <span class="math inline">\(f_0\)</span> is excluded and <span class="math inline">\(f_1\)</span> is included, we have <span class="math inline">\(\Pi = \{\sum \lambda_i r_i, 0 &lt; \lambda_0 \le 1, 0 \le \lambda_1 &lt; 1\}\)</span>. That’s all. We now have to to enumerate the points in the parametrized fundamental parallelepiped.</p>
+<h3 id="smith-normal-form-of-the-lattice-matrix-helps-a-lot" class="unnumbered">Smith normal form of the lattice matrix helps a lot</h3>
+<p>First, we observe how the number of integer points in the fundamental parallelepiped is related to the determinant of the matrix with the lattice vectors as columns. <span class="math display">\[\begin{aligned}
+  \#\left(\Pi_{A}\cap {\mathbb{Z}}^n\right) &amp;= |\det(A)|\text{, with } A = (r_1 | ... | r_n), r_i\text{ the cone rays}\\
+  &amp;= {\mathop{\mathrm{ind}}}cone(r_1,..., r_n)\end{aligned}\]</span> To see this, put A in the Smith normal form, <span class="math inline">\(A = U D V\)</span>, (<span class="math inline">\(U,D,V\)</span> integer matrices, <span class="math inline">\(D\)</span> diagonal (plus a condition on the diagonal elements, not relevant here), <span class="math inline">\(U\)</span> and <span class="math inline">\(V\)</span> unimodal). This form always exists and can be computed easily by alternating row and column reduction. There is a bijection between elements of <span class="math inline">\({\mathcal{L}}(A)\)</span> and <span class="math inline">\({\mathcal{L}}(D)\)</span> (the map <span class="math inline">\(\phi(x) = U^{-1} x\)</span> maps elements of <span class="math inline">\({\mathcal{L}}(A)\)</span> to elements of <span class="math inline">\({\mathcal{L}}(D)\)</span>. Bijective map because <span class="math inline">\(V\)</span> unimodular, and the inverse of an integer unimodular matrix is also integer). Integer points of the fundamental parallelepipeds of <span class="math inline">\({\mathcal{L}}(A)\)</span> and <span class="math inline">\({\mathcal{L}}(D)\)</span> also are in a one-to-one mapping.</p>
+<h3 id="enumerating-points-using-d-and-u" class="unnumbered">Enumerating points using <span class="math inline">\(D\)</span> and <span class="math inline">\(U\)</span></h3>
+<p>Enumerating the points in the fundamental parallelepiped of <span class="math inline">\({\mathcal{L}}(D)\)</span> is trivial as D is diagonal. It simply consists of the vectors <span class="math inline">\({\mathbf{0}} \le {\mathbf{x}} &lt; {\mathop{\mathrm{diag}}}(D)\)</span>. Given <span class="math inline">\(x \in \Pi_D\)</span>, <span class="math inline">\(Ux\)</span> corresponds to a point in the fundamental parallelepiped in <span class="math inline">\(\Pi_A\)</span>, modulo L(A).</p>
+<h3 id="finding-the-class-representative-in-pi_a" class="unnumbered">Finding the class representative in <span class="math inline">\(\Pi_A\)</span></h3>
+<p>We are gien a point <span class="math inline">\(y\)</span>, and we want to find it’s equivalent in <span class="math inline">\(\Pi_A\)</span>. Compute the inverse <span class="math inline">\(A^{-1}\)</span> over the <span class="math inline">\({\mathbb{Q}}\)</span>. <span class="math inline">\(A^{-1} y = (\lambda_1 ... \lambda_n)\)</span>. <span class="math inline">\(z = A (\bar{\lambda_1} ... \bar{\lambda_n})\)</span> with <span class="math inline">\(\bar{\lambda_i} = k + \lambda_i, k \in {\mathbb{Z}}, 0 {\overset{\scriptscriptstyle{&lt;}}{\scriptscriptstyle{\le}}}\bar{\lambda_i} {\overset{\scriptscriptstyle{&lt;}}{\scriptscriptstyle{\le}}}1\)</span> is the corresponding point in the face parametrized fundamental parallelepiped. The weird symbol <span class="math inline">\({\overset{\scriptscriptstyle{&lt;}}{\scriptscriptstyle{\le}}}\)</span> is a reminder that we play here on strict-or-not inequalities here for the inclusion-exclusion of faces.</p>
+<h2 id="decomposing-a-simplicial-cone-as-signed-sum-of-simpler-simplicial-cones" class="unnumbered">Decomposing a simplicial cone as signed sum of simpler simplicial cones</h2>
+<p>Complexity-wise, one cannot enumerate a given simplicial cone as its size is exponential in the coordinates of the polytope. The solution is to decompose the simplicial cone as a signed sum of simpler simplicial cones. This procedure is repeated until we obtain simplicial cones of manageable index. The branching factor is at most n (n as in <span class="math inline">\({\mathbb{Z}}^n\)</span>) but the decrease of the index compensates more than enough so that the depth of the tree ends up being <span class="math inline">\(O(\log \log {\mathop{\mathrm{ind}}}B)\)</span>, with B the original simplicial cone (treated nicely in <span class="citation">(Loera, Hemmecke, and Köppe 2012)</span>, 7.1.9).</p>
+<h3 id="a-signed-decomposition-by-choosing-one-vector" class="unnumbered">A signed decomposition by choosing one vector</h3>
+<p>To achieve this, we will select a particular vector w and consider the cones <span class="math inline">\(K_i = cone(...,r_{i-1}, w,r_{i+1},...; \theta), \theta\)</span> indicating a particular parametrization for the inclusion-exclusion of the faces. One condition for this to work is that <span class="math inline">\(cone(r_1,..., r_n,w)\)</span> must be pointed. This will be true iff <span class="math inline">\(w \not\in -cone(r_1, ..., r_n)\)</span> (proof is easy). The condition gives an efficient algorithm to detect such cases. Then one can use <span class="math inline">\(-w\)</span>.<br />
+</p>
+<h3 id="finding-the-sign-for-each-cone" class="unnumbered">Finding the sign for each cone</h3>
+<p><span class="math display">\[\begin{aligned}
+  [K] =&amp; \sum \varepsilon_i [K_i]\\
+  &amp;\text{, with }\varepsilon_i = \begin{cases}
+    1 &amp;\text{ if $r_i$ and $w$ are on the same side of the hyperplane containing}\{0, r_1,...,r_{i-1},r_{i+1},r_n\}\\
+        -1&amp;\text{ if on different sides}\\
+        0&amp;\text{ if $w$ is on the hyperplane. We can drop all such cones, they won&#39;t contribute}
+  \end{cases}\end{aligned}\]</span></p>
+<h3 id="setting-the-include-exclude-property-of-faces-to-avoid-double-counting" class="unnumbered">Setting the include-exclude property of faces to avoid double counting</h3>
+<p>The inclusion-exclusion of faces is determined by modelling the problem as a satisfibility problem, with clauses of at most 2 variables. 2-SAT again. Denote by <span class="math inline">\(X_{ij}=1\)</span> if the face j of <span class="math inline">\(K_i\)</span> is included and similarly, <span class="math inline">\(Y_j\)</span> the condition for the input cone K.</p>
+<p><span class="math display">\[\begin{aligned}
+    X_{ii} * \varepsilon_i &amp;= 
+    \begin{cases}
+      1 &amp; \text{if $Y_i$}\\
+      -1 &amp; \text{otherwise}
+    \end{cases} \\
+    X_{ij} \varepsilon_i + X_{ji} \varepsilon_j &amp;= 
+    \begin{cases}
+      1 &amp; \text{if }Y_i \vee Y_j \\
+      0 &amp; \text{otherwise}
+    \end{cases}, j\neq i, 
+  \end{aligned}\]</span></p>
+<h2 id="choosing-the-vector-w-guiding-the-decomposition" class="unnumbered">Choosing the vector <span class="math inline">\(w\)</span> guiding the decomposition</h2>
+<p>As the cone K is of full dimension, we have <span class="math inline">\(w = A\alpha\)</span>. (A the matrix of K (columns are <span class="math inline">\(r_i\)</span>)) Let <span class="math display">\[\begin{aligned}
+U &amp;= ({\mathop{\mathrm{ind}}}K_1, ... {\mathop{\mathrm{ind}}}K_n) \\
+  &amp;= (\det(\sum r_i \alpha_i, r_2,...,r_n), ..., \det(r_1, r_2,...,, \sum r_i \alpha_i)) \\
+  &amp;= (\alpha_1 {\mathop{\mathrm{ind}}}K, ..., \alpha_n {\mathop{\mathrm{ind}}}K) \\
+  &amp;= \alpha \times {\mathop{\mathrm{ind}}}K\end{aligned}\]</span> We want to find the shortest vector <span class="math inline">\(\alpha\)</span> (relative to the norm <span class="math inline">\(\|\|_{\infty}\)</span>), with <span class="math inline">\(w\)</span> integer. <span class="math display">\[\begin{aligned}
+\alpha = A^{-1} w = ((A^{-1} \times \det(A)) w) / \det(A)\end{aligned}\]</span> The matrix <span class="math inline">\((A^{-1} \times \det(A))\)</span> is an integer matrix (Cramer’s rule). Finding the minimum <span class="math inline">\(\alpha\)</span> is then equivalent to finding the shortest vector of the lattice spanned by the columns of <span class="math inline">\((A^{-1} \times \det(A))\)</span>. The LLL algorithm can do that. w is recovered easily from <span class="math inline">\(\alpha\)</span>.</p>
+<p>Note: one should always take the <span class="math inline">\(\gcd\)</span> of the coefficients for each rays, otherwise it will be hard to reduce the index.</p>
+<h1 id="evaluating-the-generating-function-at-z1" class="unnumbered">Evaluating the generating function at <span class="math inline">\(z=1\)</span></h1>
+<p>The full generating function looks like: <span class="math display">\[\begin{aligned}
+  f(z,P) &amp;= \sum_{cone(C_i, v_i, \theta_i)} \varepsilon_i z^{v_i} \frac {\sum_{u \in \Pi_{C_i,\theta_i}} z^u}{\prod_{j=1}^n (1 - z^{r_{C_{i,j}}})} \\ 
+  &amp;= \sum_i \varepsilon_i \frac {z^{a_i}} {\prod_{j=1}^n (1 - z^{b_{ij}})}\end{aligned}\]</span></p>
+<p>Warning: mathematical soundness of what follows is probably garbage; I’m just lowly software engineer that had just a few analysis class ages ago. Anyways.</p>
+<h3 id="from-multivariate-limit-to-univariate" class="unnumbered">From multivariate limit to univariate</h3>
+<p>Looking at the formula we see that z=1 is a pole, so it’s not that simple to evaluate. As the number of poles is finite (one for each rays), the function is meromorphic on <span class="math inline">\({\mathbb{R}}^n\)</span>. We can evaluate the function at z=1 using limits from whichever direction. Let <span class="math inline">\(z_\tau=(e^{\tau \lambda_1}, ..., e^{\tau \lambda_n})\)</span>. Then <span class="math display">\[\begin{aligned}
+  \lim_{z \to 1} f(z,P) &amp;= \lim_{\tau \to 0} f(z_\tau, P) \\
+  &amp;= \lim_{\tau \to 0}\sum_i \varepsilon_i \frac {e^{\tau &lt;\lambda, a_i&gt;}} {\prod_{j=1}^n \left(1 - e^{\tau &lt;\lambda, b_{ij}&gt;}\right)} \\ 
+  &amp;= \lim_{\tau \to 0}\sum_i \varepsilon_i \tau ^{-n} e^{\tau &lt;\lambda, a_i&gt;}\prod_{j=1}^n \frac{\tau}{\left(1 - e^{\tau &lt;\lambda, b_{ij}&gt;}\right)}\end{aligned}\]</span> If <span class="math inline">\(\forall i,j, &lt;\lambda, b_{ij}&gt; \neq 0\)</span>, we still have a meromorphic function and the limit approach remains valid.</p>
+<h3 id="removing-the-limit-by-taylor-expansions" class="unnumbered">Removing the limit by Taylor expansions</h3>
+<p>The last change in the previous equations was done because the function <span class="math inline">\(h(x) = x / (1 - e^{-x})\)</span> is analytical in the neighborhood of 0, meaning that there is a taylor expansion at 0.</p>
+<p><span class="math display">\[\begin{aligned}
+  \#P &amp;= \lim_{\tau \to 0} \sum_i \varepsilon_i \tau ^{-n} e^{\tau &lt;\lambda, a_i&gt;}\frac{\tau}{\prod_{j=1}^n \left(1 - e^{\tau &lt;\lambda, b_{ij}&gt;}\right)} \\ 
+  &amp;= \lim_{\tau \to 0} \sum_i \varepsilon_i \tau ^{-n} f_1(\tau, a_i) \prod_{j=1}^n f_2(\tau, b_{ij}) \\ 
+  &amp;= \sum_i \varepsilon_i \left(f_1(x, a_i) \prod_{j=1}^n f_2(x, b_{ij})\right)[n]\text{, where $[n]$ means getting the coefficient of $x^n$}\end{aligned}\]</span></p>
+<p>Cool, we only need to compute the taylor expansion of <span class="math inline">\(f_1\)</span> and <span class="math inline">\(f_2\)</span> with <span class="math inline">\(n+1\)</span> terms. Note that for efficiency, the polynomial multiplications should be done mod <span class="math inline">\(x^{n+1}\)</span> so that useless terms are never computed.</p>
+<h3 id="computing-the-taylor-expansions" class="unnumbered">Computing the Taylor expansions</h3>
+<p><span class="math inline">\(f_1\)</span> is trivial.<br />
+<span class="math inline">\(f_2(x,b_{ij}) = \frac{h(-\tau &lt;\lambda, b_{ij}&gt;)}{-&lt;\lambda, b_{ij}&gt;}\)</span> We now need the taylor expansion of h(x). It’s easy to compute the expansion of <span class="math inline">\(1/h(x) = (1-e^{-x})/x\)</span> (remove first term of <span class="math inline">\(-e^{-x}\)</span>, then shift by 1). Then, <span class="math display">\[\begin{aligned}
+1 = h(x) \times (1/h(x)) = (\sum a_i x^i) (\sum b_i x^i)\end{aligned}\]</span>. A decent recurrence formula is not hard to obtain from this(<span class="citation">(Loera, Hemmecke, and Köppe 2012)</span> chapter 7 covers this in depth).</p>
+<h3 id="choosing-lambda" class="unnumbered">Choosing <span class="math inline">\(\lambda\)</span></h3>
+<p>Papers use a rather involved method using the moment curve. If you’re fine with a randomized algorithm then just select a random vector and you’ll do ok. The reason for this is that the set of bad vectors is measure zero. That’s because you have a finite number of rays which must not be orthogonal to your <span class="math inline">\(\lambda\)</span>. A finite union of measure zero sets is a measure zero set (the subspace orthogonal to a nonzero vector of dimension n is of dimension n-1, hence of measure zero).</p>
+<h1 id="handling-complications" class="unnumbered">Handling complications</h1>
+<h2 id="rational-vertices" class="unnumbered">Rational vertices</h2>
+<p>Our generating function is a Laurent serie thus the variables have integer coefficients. That does not sit well with <span class="math inline">\(z^{v_i}\)</span> nor <span class="math inline">\(\Pi_{C_i,\theta_i}\)</span> in the formula. This is handled by shifting the cone to a nearby integer point and enumerating the points of the fundamental parallelepiped so that these points are in the fundamental parallelepiped of the cone at the rational vertex by playing on the lattice coefficients of the shift (so that <span class="math inline">\(0{\overset{\scriptscriptstyle{&lt;}}{\scriptscriptstyle{\le}}}\lambda_i {\overset{\scriptscriptstyle{&lt;}}{\scriptscriptstyle{\le}}}1\)</span> in the view of the original rational cone).</p>
+<h2 id="degenerate-polytopes" class="unnumbered">Degenerate polytopes</h2>
+<p>A degenerate polytope is defined as <span class="math inline">\(P = \{x | Ax \le B, Cx = D\}\)</span>. If the polytope is not full dimensional, everything breaks down as lattice determinant are valid only for full dimensional lattices. The solution is to project the polytope on a lower dimensional space such that there is a bijection between the integer points of the original and projected polytope. This is done by projecting iteratively on a subspace of dimension one less.</p>
+<p>Let r be the first column of C, with <span class="math inline">\(\gcd(r) = 1\)</span> (important, and if can’t simplify with <span class="math inline">\(D_1\)</span>, no solution exist). There exists an integer unimodular matrix <span class="math inline">\(M\)</span> such that <span class="math inline">\(rM = (1,0,...,0)\)</span> (hint: as <span class="math inline">\(\gcd = 1\)</span>, <span class="math inline">\(r\)</span> can be reduced to <span class="math inline">\((1,0,...,0)\)</span> by unimodular operations. Representing these operations in a matrix gives <span class="math inline">\(M\)</span>). Since <span class="math inline">\(M\)</span> is integer unimodular, integer points <span class="math inline">\({\mathbb{Z}}^n\)</span> and <span class="math inline">\(M \times {\mathbb{Z}}^n\)</span> are in bijection. Additionally, let <span class="math inline">\(x \in P\)</span>. Then <span class="math display">\[\begin{aligned}
+  r^t x = (x^t M^{-1})_1 = D_1 \text{, ($M^{-1}$ has $r$ as its first row)}\end{aligned}\]</span> In other words, <span class="math inline">\(x^t M^{-1} = \begin{pmatrix}D_1 \\  y\end{pmatrix}\text{ and }x = M \begin{pmatrix}D_1 \\  y\end{pmatrix}\)</span> (y integer because M is integer and unimodular). The new polytope hyperplanes in the subspace are computed next. As a reminder, <span class="math inline">\(P = \{x | Ax \le B, Cx = D\}\)</span>. Consider one relation: <span class="math display">\[\begin{aligned}
+  A_i^t x &amp; \le B_i  \\
+  A_i^t \left(M \begin{pmatrix}D_1 \\ y\end{pmatrix}\right) &amp;\le B_i\\
+  A\prime^t_i y &amp;\le B\prime_i\\
+   \text{, where } &amp; A\prime^t_i = (A_i^t M)_{2...n}\\ 
+  &amp;B\prime_i = B_i - (A_i^t M)_1 \times D_1\end{aligned}\]</span></p>
+<p>Similarly, relations <span class="math inline">\(Cx=D\)</span> are updated.</p>
+<h2 id="switching-between-cone-and-planar-representation-of-a-polytope" class="unnumbered">Switching between cone and planar representation of a polytope</h2>
+<p>Degenerate polygons forces us to have primitives to switch the representation of a polytope. The simplest way to achieve this is finding submatrices of full rank from the constraints to find vertices and computing hyperplanes from n-1 vertices. Standard stuff, not much to talk about.</p>
+<h1 id="closing-words" class="unnumbered">Closing words</h1>
+<p>All done. There’s plenty more to talk about the applications of this algorithm but the references are there for that. Anyway, the algorithm in itself is worth the journey. I find especially pretty how the representation as a polynomial allows us to drop non pointed cones and then how the evaluation of the polynomial is done through series expansions.</p>
+<p>I might release the C++ code if there is interest (&lt; 2000 lines). However it would either be unusable as is or I would need to release my personal codebase (hurray single repo :) ).</p>
+<p>Until then,</p>
+<div id="refs" class="references">
+<div id="ref-DeLoera2012">
+<p>Loera, Jesús A. De, Raymond Hemmecke, and Matthias Köppe. 2012. <em>Algebraic and Geometric Ideas in the Theory of Discrete Optimization</em>. Society for Industrial; Applied Mathematics. doi:<a href="https://doi.org/10.1137/1.9781611972443">10.1137/1.9781611972443</a>.</p>
+</div>
+<div id="ref-Yoshida">
+<p>Yoshida, Ruriko. n.d. <em>Barvinok’s Enumeration Algorithm and Applications to Statistics</em>.</p>
+</div>
+</div>
+</body>
+</html>
